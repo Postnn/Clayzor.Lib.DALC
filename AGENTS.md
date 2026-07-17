@@ -13,11 +13,13 @@
 - `FN_{Name}` — пользовательские функции
 
 ### Rules
-- Queries use `DbManager` (scoped per-request) injected via `@inject DbManager Db`
+- Queries use `DbManager` (scoped: одно подключение на circuit в Blazor Server, на HTTP-запрос в ASP.NET Core) injected via `@inject DbManager Db`
 - Raw SQL for queries: `Db.QueryAsync<T>(SQLQueries.CONST_NAME)` — `QueryAsync` defaults to `CommandType.Text`
 - Raw SQL for commands: `Db.ExecuteAsync(SQLQueries.CONST_NAME, entity, commandType: CommandType.Text)` — **must pass `commandType: CommandType.Text`** because `ExecuteAsync` defaults to `CommandType.StoredProcedure`
 - Stored procedures: `Db.QueryStoredProcAsync<T>(name, params)`
-- All database access must go through `DbManager` methods — no direct `SqlConnection` or Dapper calls in pages or other assemblies
+- All database access must go through `DbManager` methods or `DbManager.RunAsync<T>` — no direct `SqlConnection` or Dapper calls in pages or other assemblies
+- **MARS выключен намеренно.** Доступ к единственному `SqlConnection` сериализован `SemaphoreSlim`-шлюзом (`RunAsync<T>`). Внешний код, работающий с `db.Connection` напрямую (минуя `RunAsync`), — запрещён
+- **`ISqlErrorHandler` не имеет права обращаться в БД** — `catch(SqlException)` снаружи `RunAsync`, чтобы `HandleSqlError` не выполнялся под шлюзом
 - Column names in SQL are **Russian**: `КодМедицинскогоАнализа`, `НазваниеАнализа`, etc.
 - Entity properties map to Russian columns via `[Column(MedA.Имя)]` referencing constants from `ColumnNames.cs` — каждое имя колонки определено ровно один раз
 - Every entity class must be registered in `DapperColumnMapper.Initialize()`

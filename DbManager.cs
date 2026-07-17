@@ -8,7 +8,7 @@ namespace Clayzor.Lib.DALC;
 /// <summary>
 /// Менеджер подключения к SQL Server через Dapper.
 /// Управляет ленивым открытием <see cref="SqlConnection"/> и предоставляет методы для выполнения запросов.
-/// Регистрируется как Scoped (одно подключение на HTTP-запрос).
+/// Регистрируется как Scoped (одно подключение на circuit в Blazor Server, на HTTP-запрос в ASP.NET Core).
 /// При возникновении <see cref="SqlException"/> автоматически передаёт ошибку в <see cref="ISqlErrorHandler"/>.
 /// </summary>
 public class DbManager : IDisposable
@@ -16,6 +16,14 @@ public class DbManager : IDisposable
     private readonly string _connectionString;
     private readonly ISqlErrorHandler? _errorHandler;
     private SqlConnection? _connection;
+
+    /// <summary>
+    /// Сериализует доступ к единственному соединению скоупа. В Blazor Server скоуп живёт
+    /// столько же, сколько circuit, а рендерер может вызвать OnAfterRenderAsync посреди
+    /// уже запущенного обработчика — два await'а на одном SqlConnection без MARS дают
+    /// InvalidOperationException.
+    /// </summary>
+    private readonly SemaphoreSlim _gate = new(1, 1);
 
     /// <summary>
     /// Создаёт экземпляр <see cref="DbManager"/> с указанной строкой подключения.
@@ -35,6 +43,8 @@ public class DbManager : IDisposable
 
     /// <summary>
     /// Ленивое подключение к SQL Server. Открывается при первом обращении, повторно используется в рамках скоупа.
+    /// ВНИМАНИЕ: выполнять запросы напрямую через это свойство НЕЛЬЗЯ — только через методы
+    /// <see cref="DbManager"/> или <see cref="RunAsync{T}"/>.
     /// </summary>
     public SqlConnection Connection
     {
@@ -49,13 +59,33 @@ public class DbManager : IDisposable
     }
 
     /// <summary>
+    /// Выполняет операцию на соединении скоупа под шлюзом. Единственный законный способ
+    /// работать с <see cref="SqlConnection"/> снаружи DbManager.
+    /// Внутри действия нельзя вызывать другие методы DbManager — шлюз не реентерабельный.
+    /// Результат обязан быть буферизованным (Dapper по умолчанию buffered: true):
+    /// незакрытый reader после выхода из-под шлюза вернёт ошибку.
+    /// </summary>
+    public async Task<T> RunAsync<T>(Func<SqlConnection, Task<T>> action)
+    {
+        await _gate.WaitAsync();
+        try
+        {
+            return await action(Connection);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    /// <summary>
     /// Выполняет хранимую процедуру и возвращает коллекцию сущностей.
     /// </summary>
     public async Task<IEnumerable<T>> QueryStoredProcAsync<T>(string storedProcName, object? parameters = null, int? commandTimeout = null)
     {
         try
         {
-            return await Connection.QueryAsync<T>(storedProcName, parameters, commandType: CommandType.StoredProcedure, commandTimeout: commandTimeout);
+            return await RunAsync(c => c.QueryAsync<T>(storedProcName, parameters, commandType: CommandType.StoredProcedure, commandTimeout: commandTimeout));
         }
         catch (SqlException ex)
         {
@@ -71,7 +101,7 @@ public class DbManager : IDisposable
     {
         try
         {
-            return await Connection.QueryAsync<T>(sql, parameters, commandTimeout: commandTimeout);
+            return await RunAsync(c => c.QueryAsync<T>(sql, parameters, commandTimeout: commandTimeout));
         }
         catch (SqlException ex)
         {
@@ -87,7 +117,7 @@ public class DbManager : IDisposable
     {
         try
         {
-            return await Connection.ExecuteScalarAsync<T>(storedProcName, parameters, commandType: commandType);
+            return await RunAsync(c => c.ExecuteScalarAsync<T>(storedProcName, parameters, commandType: commandType));
         }
         catch (SqlException ex)
         {
@@ -103,7 +133,7 @@ public class DbManager : IDisposable
     {
         try
         {
-            return await Connection.ExecuteAsync(storedProcName, parameters, commandType: commandType);
+            return await RunAsync(c => c.ExecuteAsync(storedProcName, parameters, commandType: commandType));
         }
         catch (SqlException ex)
         {
@@ -149,5 +179,6 @@ public class DbManager : IDisposable
             _connection.Dispose();
             _connection = null;
         }
+        _gate.Dispose();
     }
 }
