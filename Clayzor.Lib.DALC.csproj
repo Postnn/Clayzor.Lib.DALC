@@ -9,4 +9,7 @@
     <PackageReference Include="Microsoft.Data.SqlClient" Version="6.*" />
     <PackageReference Include="Dapper" Version="2.*" />
   </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Clayzor.Lib.Web.Controls.Tests" />
+  </ItemGroup>
 </Project>

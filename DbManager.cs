@@ -72,6 +72,11 @@ public class DbManager : IDisposable
         {
             return await action(Connection);
         }
+        catch (SqlException ex) when (IsConnectivityError(ex))
+        {
+            _errorHandler?.HandleSqlError(ex, _connectionString, "RunAsync", []);
+            return default!;
+        }
         finally
         {
             _gate.Release();
@@ -90,6 +95,8 @@ public class DbManager : IDisposable
         catch (SqlException ex)
         {
             _errorHandler?.HandleSqlError(ex, _connectionString, storedProcName, ExtractParams(parameters));
+            if (IsConnectivityError(ex))
+                return [];
             throw;
         }
     }
@@ -106,6 +113,8 @@ public class DbManager : IDisposable
         catch (SqlException ex)
         {
             _errorHandler?.HandleSqlError(ex, _connectionString, sql, ExtractParams(parameters));
+            if (IsConnectivityError(ex))
+                return [];
             throw;
         }
     }
@@ -122,6 +131,8 @@ public class DbManager : IDisposable
         catch (SqlException ex)
         {
             _errorHandler?.HandleSqlError(ex, _connectionString, storedProcName, ExtractParams(parameters));
+            if (IsConnectivityError(ex))
+                return default;
             throw;
         }
     }
@@ -138,6 +149,8 @@ public class DbManager : IDisposable
         catch (SqlException ex)
         {
             _errorHandler?.HandleSqlError(ex, _connectionString, storedProcName, ExtractParams(parameters));
+            if (IsConnectivityError(ex))
+                return default;
             throw;
         }
     }
@@ -165,6 +178,70 @@ public class DbManager : IDisposable
             .GetProperties(BindingFlags.Public | BindingFlags.Instance)
             .Select(p => (p.Name, p.GetValue(parameters)))
             .ToList();
+    }
+
+    /// <summary>
+    /// Коды ошибок SQL Server, связанные с сетевыми проблемами и недоступностью сервера.
+    /// </summary>
+    private static readonly HashSet<int> ConnectivityErrorCodes = new()
+    {
+        2, 40, 53, 64, 121, 233, 258, 4060, 11001, 1231, -1, -2,
+    };
+
+    /// <summary>
+    /// Определяет, является ли код ошибки SQL Server ошибкой недоступности сервера.
+    /// </summary>
+    /// <param name="errorNumber">Код ошибки (<see cref="SqlException.Number"/>).</param>
+    /// <returns><c>true</c>, если код связан с недоступностью сервера.</returns>
+    internal static bool IsConnectivityErrorCode(int errorNumber)
+    {
+        return ConnectivityErrorCodes.Contains(errorNumber);
+    }
+
+    /// <summary>
+    /// Определяет, является ли исключение SQL Server ошибкой недоступности сервера
+    /// (потеря сетевого соединения, сервер не найден, таймаут подключения).
+    /// Такие ошибки не должны ронять страницу — вместо этого показывается оверлей
+    /// с автоматическим переподключением.
+    /// </summary>
+    /// <param name="ex">Исключение SQL Server.</param>
+    /// <returns><c>true</c>, если ошибка связана с недоступностью сервера.</returns>
+    /// <remarks>
+    /// Коды ошибок SQL Server, классифицируемые как connectivity-проблемы:
+    /// <list type="bullet">
+    ///   <item><b>2</b> — Timeout expired (connection timeout).</item>
+    ///   <item><b>40</b> — Could not open a connection to SQL Server (Named Pipes).</item>
+    ///   <item><b>53</b> — Named Pipes provider: could not open a connection.</item>
+    ///   <item><b>121</b> — Semaphore timeout (resource pool exhaustion).</item>
+    ///   <item><b>233</b> — Client was unable to establish a connection (pipe closed).</item>
+    ///   <item><b>258</b> — Login timeout expired.</item>
+    ///   <item><b>4060</b> — Cannot open database requested by login.</item>
+    ///   <item><b>11001</b> — Host not found (Winsock).</item>
+    ///   <item><b>1231</b> — Network-related or instance-specific error.</item>
+    ///   <item><b>-1</b> — Transport-level error.</item>
+    ///   <item><b>-2</b> — DBNETLIB Connection timeout / ATTN timeout.</item>
+    /// </list>
+    /// Также проверяет <see cref="System.ComponentModel.Win32Exception"/> во
+    /// <see cref="Exception.InnerException"/> (например, ошибка 2 «Не удаётся найти указанный файл»).
+    /// </remarks>
+    public static bool IsConnectivityError(SqlException ex)
+    {
+        if (ConnectivityErrorCodes.Contains(ex.Number))
+            return true;
+
+        // Win32Exception внутри SqlException (например «Не удаётся найти указанный файл»)
+        // указывает на проблему на уровне транспорта / сокета
+        if (ex.InnerException is System.ComponentModel.Win32Exception win32
+            && ConnectivityErrorCodes.Contains(win32.NativeErrorCode))
+            return true;
+
+        // Fallback: сообщения о разрыве/невозможности восстановления подключения
+        // (драйвер Microsoft.Data.SqlClient может вернуть нестандартный код)
+        if (ex.Message.Contains("разрыв подключения", StringComparison.OrdinalIgnoreCase)
+            || ex.Message.Contains("восстановление невозможно", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        return false;
     }
 
     /// <summary>
