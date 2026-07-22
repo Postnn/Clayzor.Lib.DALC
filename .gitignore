@@ -1,0 +1,17 @@
+﻿# .NET build output
+bin/
+obj/
+
+# IDE / user files
+*.user
+*.suo
+.vs/
+.vscode/
+
+# NuGet
+*.nupkg
+
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
