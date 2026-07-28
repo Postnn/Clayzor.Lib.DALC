@@ -24,6 +24,11 @@
 - Entity properties map to Russian columns via `[Column(MedA.Имя)]` referencing constants from `ColumnNames.cs` — каждое имя колонки определено ровно один раз
 - Every entity class must be registered in `DapperColumnMapper.Initialize()`
 - `@using System.Data` required in `_Imports.razor` when using `CommandType.Text`
+- **Любая операция с базой данных обязана сопровождаться индикатором загрузки:**
+  оверлей `.clay-busy` через `RunBusyAsync` (как в `ClayGrid.ExportMenu.cs`).
+  После установки флага загрузки и вызова `StateHasChanged()` — `await Task.Delay(100)` для гарантированного
+  рендера индикатора до начала операции. `Task.Yield()` не всегда успевает отдать рендер,
+  особенно при вызове из дочернего компонента.
 
 ### SQL Server 2008 R2 pagination
 - **Запрещено** использовать `OFFSET/FETCH` (требует SQL Server 2012+). Вместо этого — `ROW_NUMBER()`:
