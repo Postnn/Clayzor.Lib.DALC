@@ -75,7 +75,7 @@ public class DbManager : IDisposable
         catch (SqlException ex) when (IsConnectivityError(ex))
         {
             _errorHandler?.HandleSqlError(ex, _connectionString, "RunAsync", []);
-            return default!;
+            throw; // пробрасываем — внешний catch решит: write → throw, read → default
         }
         finally
         {
@@ -94,7 +94,8 @@ public class DbManager : IDisposable
         }
         catch (SqlException ex)
         {
-            _errorHandler?.HandleSqlError(ex, _connectionString, storedProcName, ExtractParams(parameters));
+            if (!IsConnectivityError(ex))
+                _errorHandler?.HandleSqlError(ex, _connectionString, storedProcName, ExtractParams(parameters));
             if (IsConnectivityError(ex))
                 return [];
             throw;
@@ -112,7 +113,8 @@ public class DbManager : IDisposable
         }
         catch (SqlException ex)
         {
-            _errorHandler?.HandleSqlError(ex, _connectionString, sql, ExtractParams(parameters));
+            if (!IsConnectivityError(ex))
+                _errorHandler?.HandleSqlError(ex, _connectionString, sql, ExtractParams(parameters));
             if (IsConnectivityError(ex))
                 return [];
             throw;
@@ -130,7 +132,8 @@ public class DbManager : IDisposable
         }
         catch (SqlException ex)
         {
-            _errorHandler?.HandleSqlError(ex, _connectionString, storedProcName, ExtractParams(parameters));
+            if (!IsConnectivityError(ex))
+                _errorHandler?.HandleSqlError(ex, _connectionString, storedProcName, ExtractParams(parameters));
             if (IsConnectivityError(ex))
                 return default;
             throw;
@@ -148,10 +151,10 @@ public class DbManager : IDisposable
         }
         catch (SqlException ex)
         {
-            _errorHandler?.HandleSqlError(ex, _connectionString, storedProcName, ExtractParams(parameters));
-            if (IsConnectivityError(ex))
-                return default;
-            throw;
+            // Для connectivity handler уже вызван в RunAsync. Вызываем только для не-connectivity.
+            if (!IsConnectivityError(ex))
+                _errorHandler?.HandleSqlError(ex, _connectionString, storedProcName, ExtractParams(parameters));
+            throw; // write всегда бросает — 0 affected rows неотличим от connectivity default
         }
     }
 
