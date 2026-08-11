@@ -21,6 +21,7 @@
 - **MARS выключен намеренно.** Доступ к единственному `SqlConnection` сериализован `SemaphoreSlim`-шлюзом (`RunAsync<T>`). Внешний код, работающий с `db.Connection` напрямую (минуя `RunAsync`), — запрещён
 - **`ISqlErrorHandler` не имеет права обращаться в БД** — `catch(SqlException)` снаружи `RunAsync`, чтобы `HandleSqlError` не выполнялся под шлюзом
 - **Контракт ошибок (CTFR3):** `RunAsync` вызывает `ISqlErrorHandler` ровно 1 раз для connectivity (label `"RunAsync"`, пустые params) и пробрасывает исключение. `ExecuteAsync` (write) всегда бросает `SqlException` — возвращённый 0 это валидный результат SQL, не сигнал ошибки. `ExecuteScalarAsync`/`QueryAsync`/`QueryStoredProcAsync` (read) возвращают default/пусто для connectivity. `DynamicSql.Query*` (read) возвращают default/пусто для connectivity. `OperationCanceledException` не перехватывается нигде.
+- **Testability seam (CTFR3.3):** `DbManager` имеет internal constructor с `Func<DbConnection>` — позволяет tests подменять создание подключения. Default production path: `() => new SqlConnection(connectionString)`. `RunAsync<T>` принимает `Func<DbConnection, Task<T>>` (Dapper совместим).
 - Column names in SQL are **Russian**: `КодМедицинскогоАнализа`, `НазваниеАнализа`, etc.
 - Entity properties map to Russian columns via `[Column(MedA.Имя)]` referencing constants from `ColumnNames.cs` — каждое имя колонки определено ровно один раз
 - Every entity class must be registered in `DapperColumnMapper.Initialize()`

@@ -1,4 +1,5 @@
 using System.Data;
+using System.Data.Common;
 using System.Reflection;
 using Dapper;
 using Microsoft.Data.SqlClient;
@@ -7,7 +8,7 @@ namespace Clayzor.Lib.DALC;
 
 /// <summary>
 /// Менеджер подключения к SQL Server через Dapper.
-/// Управляет ленивым открытием <see cref="SqlConnection"/> и предоставляет методы для выполнения запросов.
+/// Управляет ленивым открытием <see cref="DbConnection"/> и предоставляет методы для выполнения запросов.
 /// Регистрируется как Scoped (одно подключение на circuit в Blazor Server, на HTTP-запрос в ASP.NET Core).
 /// При возникновении <see cref="SqlException"/> автоматически передаёт ошибку в <see cref="ISqlErrorHandler"/>.
 /// </summary>
@@ -15,25 +16,37 @@ public class DbManager : IDisposable
 {
     private readonly string _connectionString;
     private readonly ISqlErrorHandler? _errorHandler;
-    private SqlConnection? _connection;
+    private readonly Func<DbConnection> _connectionFactory;
+    private DbConnection? _connection;
 
     /// <summary>
     /// Сериализует доступ к единственному соединению скоупа. В Blazor Server скоуп живёт
     /// столько же, сколько circuit, а рендерер может вызвать OnAfterRenderAsync посреди
-    /// уже запущенного обработчика — два await'а на одном SqlConnection без MARS дают
+    /// уже запущенного обработчика — два await'а на одном соединении без MARS дают
     /// InvalidOperationException.
     /// </summary>
     private readonly SemaphoreSlim _gate = new(1, 1);
 
     /// <summary>
     /// Создаёт экземпляр <see cref="DbManager"/> с указанной строкой подключения.
+    /// Default production factory: <c>() => new SqlConnection(connectionString)</c>.
     /// </summary>
     /// <param name="connectionString">Строка подключения к SQL Server.</param>
     /// <param name="errorHandler">Обработчик ошибок SQL (опционально).</param>
     public DbManager(string connectionString, ISqlErrorHandler? errorHandler = null)
+        : this(connectionString, errorHandler, () => new SqlConnection(connectionString))
+    {
+    }
+
+    /// <summary>
+    /// Создаёт экземпляр с injectable connection factory (CTFR3.3 test seam).
+    /// </summary>
+    internal DbManager(string connectionString, ISqlErrorHandler? errorHandler,
+        Func<DbConnection> connectionFactory)
     {
         _connectionString = connectionString ?? throw new ArgumentNullException(nameof(connectionString));
         _errorHandler = errorHandler;
+        _connectionFactory = connectionFactory ?? throw new ArgumentNullException(nameof(connectionFactory));
     }
 
     /// <summary>
@@ -42,16 +55,16 @@ public class DbManager : IDisposable
     public string ConnectionString => _connectionString;
 
     /// <summary>
-    /// Ленивое подключение к SQL Server. Открывается при первом обращении, повторно используется в рамках скоупа.
+    /// Ленивое подключение. Открывается при первом обращении, повторно используется в рамках скоупа.
     /// ВНИМАНИЕ: выполнять запросы напрямую через это свойство НЕЛЬЗЯ — только через методы
     /// <see cref="DbManager"/> или <see cref="RunAsync{T}"/>.
     /// </summary>
-    public SqlConnection Connection
+    public DbConnection Connection
     {
         get
         {
             if (_connection is null)
-                _connection = new SqlConnection(_connectionString);
+                _connection = _connectionFactory();
             if (_connection.State != ConnectionState.Open)
                 _connection.Open();
             return _connection;
@@ -60,12 +73,12 @@ public class DbManager : IDisposable
 
     /// <summary>
     /// Выполняет операцию на соединении скоупа под шлюзом. Единственный законный способ
-    /// работать с <see cref="SqlConnection"/> снаружи DbManager.
+    /// работать с <see cref="DbConnection"/> снаружи DbManager.
     /// Внутри действия нельзя вызывать другие методы DbManager — шлюз не реентерабельный.
     /// Результат обязан быть буферизованным (Dapper по умолчанию buffered: true):
     /// незакрытый reader после выхода из-под шлюза вернёт ошибку.
     /// </summary>
-    public async Task<T> RunAsync<T>(Func<SqlConnection, Task<T>> action)
+    public async Task<T> RunAsync<T>(Func<DbConnection, Task<T>> action)
     {
         await _gate.WaitAsync();
         try
