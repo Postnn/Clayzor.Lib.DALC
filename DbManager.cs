@@ -55,35 +55,50 @@ public class DbManager : IDisposable
     public string ConnectionString => _connectionString;
 
     /// <summary>
-    /// Ленивое подключение. Открывается при первом обращении, повторно используется в рамках скоупа.
+    /// Ленивое подключение к SQL Server. Открывается при первом обращении, повторно используется в рамках скоупа.
     /// ВНИМАНИЕ: выполнять запросы напрямую через это свойство НЕЛЬЗЯ — только через методы
     /// <see cref="DbManager"/> или <see cref="RunAsync{T}"/>.
     /// </summary>
-    public DbConnection Connection
-    {
-        get
-        {
-            if (_connection is null)
-                _connection = _connectionFactory();
-            if (_connection.State != ConnectionState.Open)
-                _connection.Open();
-            return _connection;
-        }
-    }
+    public SqlConnection Connection => (SqlConnection)GetDbConnection();
 
     /// <summary>
     /// Выполняет операцию на соединении скоупа под шлюзом. Единственный законный способ
-    /// работать с <see cref="DbConnection"/> снаружи DbManager.
+    /// работать с <see cref="SqlConnection"/> снаружи DbManager.
     /// Внутри действия нельзя вызывать другие методы DbManager — шлюз не реентерабельный.
     /// Результат обязан быть буферизованным (Dapper по умолчанию buffered: true):
     /// незакрытый reader после выхода из-под шлюза вернёт ошибку.
     /// </summary>
-    public async Task<T> RunAsync<T>(Func<DbConnection, Task<T>> action)
+    public Task<T> RunAsync<T>(Func<SqlConnection, Task<T>> action)
+        => RunCoreAsync<T>(dbConn => action((SqlConnection)dbConn));
+
+    /// <summary>
+    /// Ленивое получение соединения через factory (CTFR3.3/3.4).
+    /// </summary>
+    private DbConnection GetDbConnection()
+    {
+        if (_connection is null)
+            _connection = _connectionFactory();
+        if (_connection.State != ConnectionState.Open)
+            _connection.Open();
+        return _connection;
+    }
+
+    /// <summary>
+    /// Test seam: RunAsync для произвольного <see cref="DbConnection"/> (CTFR3.4).
+    /// </summary>
+    internal Task<T> RunDbAsync<T>(Func<DbConnection, Task<T>> action)
+        => RunCoreAsync<T>(action);
+
+    /// <summary>
+    /// Единый execution core: gate + handler + error routing (CTFR3.4).
+    /// Все public wrappers и internal seam делегируют сюда.
+    /// </summary>
+    private async Task<T> RunCoreAsync<T>(Func<DbConnection, Task<T>> action)
     {
         await _gate.WaitAsync();
         try
         {
-            return await action(Connection);
+            return await action(GetDbConnection());
         }
         catch (SqlException ex) when (IsConnectivityError(ex))
         {
@@ -103,7 +118,7 @@ public class DbManager : IDisposable
     {
         try
         {
-            return await RunAsync(c => c.QueryAsync<T>(storedProcName, parameters, commandType: CommandType.StoredProcedure, commandTimeout: commandTimeout));
+            return await RunCoreAsync(c => c.QueryAsync<T>(storedProcName, parameters, commandType: CommandType.StoredProcedure, commandTimeout: commandTimeout));
         }
         catch (SqlException ex)
         {
@@ -122,7 +137,7 @@ public class DbManager : IDisposable
     {
         try
         {
-            return await RunAsync(c => c.QueryAsync<T>(sql, parameters, commandTimeout: commandTimeout));
+            return await RunCoreAsync(c => c.QueryAsync<T>(sql, parameters, commandTimeout: commandTimeout));
         }
         catch (SqlException ex)
         {
@@ -141,7 +156,7 @@ public class DbManager : IDisposable
     {
         try
         {
-            return await RunAsync(c => c.ExecuteScalarAsync<T>(storedProcName, parameters, commandType: commandType));
+            return await RunCoreAsync(c => c.ExecuteScalarAsync<T>(storedProcName, parameters, commandType: commandType));
         }
         catch (SqlException ex)
         {
@@ -160,7 +175,7 @@ public class DbManager : IDisposable
     {
         try
         {
-            return await RunAsync(c => c.ExecuteAsync(storedProcName, parameters, commandType: commandType));
+            return await RunCoreAsync(c => c.ExecuteAsync(storedProcName, parameters, commandType: commandType));
         }
         catch (SqlException ex)
         {
