@@ -90,20 +90,32 @@ public class DbManager : IDisposable
         => RunCoreAsync<T>(action);
 
     /// <summary>
-    /// Единый execution core: gate + handler + error routing (CTFR3.4).
-    /// Все public wrappers и internal seam делегируют сюда.
+    /// Единый execution core: gate + error routing (CTFR3.5).
+    /// Connectivity handler вызывается ПОСЛЕ освобождения _gate.
     /// </summary>
     private async Task<T> RunCoreAsync<T>(Func<DbConnection, Task<T>> action)
+    {
+        try
+        {
+            return await RunUnderGateAsync(action);
+        }
+        catch (SqlException ex) when (IsConnectivityError(ex))
+        {
+            // gate УЖЕ released (finally в RunUnderGateAsync) — handler вне семафора
+            _errorHandler?.HandleSqlError(ex, _connectionString, "RunAsync", []);
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Выполняет action под _gate. Gate released в finally до возврата (CTFR3.5).
+    /// </summary>
+    private async Task<T> RunUnderGateAsync<T>(Func<DbConnection, Task<T>> action)
     {
         await _gate.WaitAsync();
         try
         {
             return await action(GetDbConnection());
-        }
-        catch (SqlException ex) when (IsConnectivityError(ex))
-        {
-            _errorHandler?.HandleSqlError(ex, _connectionString, "RunAsync", []);
-            throw; // пробрасываем — внешний catch решит: write → throw, read → default
         }
         finally
         {
