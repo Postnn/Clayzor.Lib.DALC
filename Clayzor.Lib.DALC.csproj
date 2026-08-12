@@ -11,5 +11,6 @@
   </ItemGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="Clayzor.Lib.Web.Controls.Tests" />
+    <InternalsVisibleTo Include="Clayzor.Lib.Entities" />
   </ItemGroup>
 </Project>
