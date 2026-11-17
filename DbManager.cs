@@ -181,6 +181,25 @@ public class DbManager : IDisposable
     }
 
     /// <summary>
+    /// Выполняет INSERT или другую пишущую команду со скалярным результатом.
+    /// В отличие от read-метода <see cref="ExecuteScalarAsync{T}"/>, любые SQL-ошибки,
+    /// включая потерю соединения, выбрасываются вызывающему коду.
+    /// </summary>
+    public async Task<T?> ExecuteWriteScalarAsync<T>(string sql, object? parameters = null)
+    {
+        try
+        {
+            return await RunCoreAsync(c => c.ExecuteScalarAsync<T>(sql, parameters, commandType: CommandType.Text));
+        }
+        catch (SqlException ex)
+        {
+            if (!IsConnectivityError(ex))
+                _errorHandler?.HandleSqlError(ex, _connectionString, sql, ExtractParams(parameters));
+            throw;
+        }
+    }
+
+    /// <summary>
     /// Выполняет команду (INSERT, UPDATE, DELETE) или хранимую процедуру.
     /// </summary>
     public async Task<int> ExecuteAsync(string storedProcName, object? parameters = null, CommandType commandType = CommandType.StoredProcedure)
