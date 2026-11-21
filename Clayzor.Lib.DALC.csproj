@@ -12,5 +12,6 @@
   <ItemGroup>
     <InternalsVisibleTo Include="Clayzor.Lib.Web.Controls.Tests" />
     <InternalsVisibleTo Include="Clayzor.Lib.Entities" />
+    <InternalsVisibleTo Include="Kesco.App.Web.Inventory" />
   </ItemGroup>
 </Project>
